@@ -1289,6 +1289,8 @@
       GAGAL_BATAL_TRANSAKSI: "Gagal membatalkan transaksi, silakan coba lagi",
       RENTANG_TANGGAL_TIDAK_VALID: "Rentang tanggal tidak valid",
       TIDAK_ADA_PENJUALAN: "Tidak ada penjualan pada rentang tanggal ini",
+      LAPORAN_DIUNDUH: "Laporan berhasil diunduh",
+      GAGAL_UNDUH_LAPORAN: "Gagal mengunduh laporan, silakan coba lagi",
       AKUN_DINONAKTIFKAN: "Akun berhasil dinonaktifkan",
       AKUN_DIAKTIFKAN: "Akun berhasil diaktifkan",
       TANYA_HAPUS_AKUN: "Apakah Anda yakin ingin menghapus akun ini?",
@@ -1403,6 +1405,20 @@
       const bulan = padDuaDigit(objekTanggal.getMonth() + 1);
       const tanggal = padDuaDigit(objekTanggal.getDate());
       return `${tahun}-${bulan}-${tanggal}`;
+    }
+
+    function formatTanggalCsv(tglStr) {
+      const bagian = String(tglStr).split("-");
+      if (bagian.length !== 3) return String(tglStr);
+      return `${bagian[2]}/${bagian[1]}/${bagian[0]}`;
+    }
+
+    function escapeCsvSel(nilai) {
+      const teks = String(nilai);
+      if (teks.includes(";") || teks.includes('"') || teks.includes("\r") || teks.includes("\n")) {
+        return '"' + teks.replace(/"/g, '""') + '"';
+      }
+      return teks;
     }
 
     function formatTanggalHariIniIndonesia() {
@@ -1521,6 +1537,7 @@
       idDataDiubah: null,
       keranjang: [],
       transaksiDilihat: null,
+      laporanTerakhir: null,
       pesan: null,
       demoGagalKoneksi: false,
       demoKosongkanMenu: false
@@ -1701,6 +1718,7 @@
       statusAplikasi.keranjang = [];
       statusAplikasi.idDataDiubah = null;
       statusAplikasi.transaksiDilihat = null;
+      statusAplikasi.laporanTerakhir = null;
       statusAplikasi.pesan = null;
       statusAplikasi.halamanAktif = "";
       tampilkanLayarLogin();
@@ -2674,6 +2692,39 @@
     }
 
     /* 8. Halaman Lihat Laporan Penjualan (Admin) */
+    function unduhLaporanCsv(dataLaporan) {
+      const barisCsv = [
+        escapeCsvSel("Laporan Penjualan"),
+        [escapeCsvSel("Tanggal Mulai"), escapeCsvSel(formatTanggalCsv(dataLaporan.tanggalMulai))].join(";"),
+        [escapeCsvSel("Tanggal Akhir"), escapeCsvSel(formatTanggalCsv(dataLaporan.tanggalAkhir))].join(";"),
+        [escapeCsvSel("Total Transaksi"), escapeCsvSel(dataLaporan.totalTransaksi)].join(";"),
+        [escapeCsvSel("Total Pendapatan"), escapeCsvSel(dataLaporan.totalPendapatan)].join(";"),
+        [escapeCsvSel("Menu Terlaris"), escapeCsvSel(dataLaporan.menuTerlaris)].join(";"),
+        "",
+        [escapeCsvSel("Nama Menu"), escapeCsvSel("Jumlah Terjual"), escapeCsvSel("Pendapatan")].join(";")
+      ];
+
+      dataLaporan.rincian.forEach(function (item) {
+        barisCsv.push([
+          escapeCsvSel(item.nama),
+          escapeCsvSel(item.jumlahTerjual),
+          escapeCsvSel(item.pendapatan)
+        ].join(";"));
+      });
+
+      const isiCsv = "\uFEFF" + barisCsv.join("\r\n");
+      const namaBerkas = `laporan-penjualan-${dataLaporan.tanggalMulai}-sampai-${dataLaporan.tanggalAkhir}.csv`;
+      const blob = new Blob([isiCsv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const tautan = document.createElement("a");
+      tautan.href = url;
+      tautan.setAttribute("download", namaBerkas);
+      document.body.appendChild(tautan);
+      tautan.click();
+      document.body.removeChild(tautan);
+      URL.revokeObjectURL(url);
+    }
+
     function renderHalamanLaporanPenjualan() {
       const areaKonten = document.getElementById("area-konten");
       const hariIni = new Date();
@@ -2681,11 +2732,15 @@
 
       const defaultMulai = formatTanggalInput(enamHariLalu);
       const defaultAkhir = formatTanggalInput(hariIni);
+      const tombolUnduhHtml = statusAplikasi.pengguna && statusAplikasi.pengguna.peran === "Admin"
+        ? `<button type="button" id="btn-unduh-laporan" class="btn btn-secondary" disabled>Unduh Laporan</button>`
+        : "";
 
       areaKonten.innerHTML = `
         <div id="wadah-pesan-laporan">${renderKotakPesanHalaman()}</div>
         <div class="page-header">
           <h1 class="page-title">Laporan Penjualan</h1>
+          ${tombolUnduhHtml}
         </div>
         <div class="card">
           <form id="form-filter-laporan" class="filter-row" novalidate>
@@ -2703,11 +2758,17 @@
         <div id="wadah-hasil-laporan"></div>
       `;
 
+      const btnUnduhLaporan = document.getElementById("btn-unduh-laporan");
+
       function hitungDanRenderLaporan(tglMulaiStr, tglAkhirStr) {
         const wadahPesan = document.getElementById("wadah-pesan-laporan");
         const wadahHasil = document.getElementById("wadah-hasil-laporan");
 
         if (!tglMulaiStr || !tglAkhirStr || tglAkhirStr < tglMulaiStr) {
+          statusAplikasi.laporanTerakhir = null;
+          if (btnUnduhLaporan) {
+            btnUnduhLaporan.disabled = true;
+          }
           setelPesanHalaman("error", TEKS.RENTANG_TANGGAL_TIDAK_VALID, false);
           wadahPesan.innerHTML = renderKotakPesanHalaman();
           return;
@@ -2730,6 +2791,10 @@
         });
 
         if (transaksiSelesai.length === 0) {
+          statusAplikasi.laporanTerakhir = null;
+          if (btnUnduhLaporan) {
+            btnUnduhLaporan.disabled = true;
+          }
           wadahHasil.innerHTML = `
             <div class="summary-grid">
               <div class="card summary-card summary-card-transaksi">
@@ -2779,6 +2844,19 @@
             menuTerlaris = item.nama;
           }
         });
+
+        statusAplikasi.laporanTerakhir = {
+          tanggalMulai: tglMulaiStr,
+          tanggalAkhir: tglAkhirStr,
+          totalTransaksi: totalTransaksi,
+          totalPendapatan: totalPendapatan,
+          menuTerlaris: menuTerlaris,
+          rincian: rincianList
+        };
+
+        if (btnUnduhLaporan) {
+          btnUnduhLaporan.disabled = false;
+        }
 
         const barisRincianHtml = rincianList.map(function (item) {
           return `
@@ -2833,6 +2911,23 @@
         const tglAkhir = document.getElementById("input-tanggal-akhir").value;
         hitungDanRenderLaporan(tglMulai, tglAkhir);
       });
+
+      if (btnUnduhLaporan) {
+        btnUnduhLaporan.addEventListener("click", function () {
+          if (btnUnduhLaporan.disabled || !statusAplikasi.laporanTerakhir) {
+            return;
+          }
+          const wadahPesan = document.getElementById("wadah-pesan-laporan");
+          if (statusAplikasi.demoGagalKoneksi) {
+            setelPesanHalaman("error", TEKS.GAGAL_UNDUH_LAPORAN, false);
+            wadahPesan.innerHTML = renderKotakPesanHalaman();
+            return;
+          }
+          unduhLaporanCsv(statusAplikasi.laporanTerakhir);
+          setelPesanHalaman("success", TEKS.LAPORAN_DIUNDUH, false);
+          wadahPesan.innerHTML = renderKotakPesanHalaman();
+        });
+      }
     }
 
     /* 9. Halaman Kelola Akun Kasir, Tambah Akun & Ubah Akun (Admin) */
